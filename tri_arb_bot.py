@@ -6,18 +6,34 @@ from telegram import Bot
 import pandas as pd
 import math
 from telegram import Update
-from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters as Filters, CallbackContext
+import nest_asyncio
 import time 
 from datetime import datetime
-import os.path
 import traceback
-from decimal import Decimal
-import logging
-from decimal import ROUND_DOWN,ROUND_UP
-import asyncio
 from decimal import Decimal, InvalidOperation
+import logging
+from decimal import ROUND_DOWN, ROUND_UP
 import numpy as np
 
+nest_asyncio.apply()
+TOKEN = '7204730367:AAFha8VzlPCcL5LMsh_wpOE2B6UxM4v5J2s'
+CHAT_ID = '-4212270800'  # Замените YOUR_CHAT_ID на правильный chat_id
+
+# Определение функций-обработчиков
+async def start(update: Update, context: CallbackContext):
+    await update.message.reply_text('Hello! I am your bot.')
+
+async def help_command(update: Update, context: CallbackContext):
+    await update.message.reply_text('Help!')
+
+async def echo(update: Update, context: CallbackContext):
+    await update.message.reply_text(update.message.text)
+
+# Определение функции для отправки сообщения
+async def send_message(token, chat_id, text):
+    bot = Bot(token)
+    await bot.send_message(chat_id=chat_id, text=text)
 
 logging.basicConfig(filename='arbitrage.log', level=logging.INFO, format='%(asctime)s %(message)s')
 start_time = time.time()
@@ -39,8 +55,8 @@ kucoin_api_secret = os.environ.get('kucoin_api_secret')
 kucoin_password = os.environ.get('kucoin_password')
 
 # Load bot token and chat ID
-bot_token = os.environ.get('bot_token')
-chat_id = os.environ.get('chat_id')
+bot_token = TOKEN
+chat_id = CHAT_ID  # Используйте правильный chat_id
 
 # Set the minimum time between messages of the Telegram Bot for each trading pair (in seconds)
 min_message_interval = 60   # 1 minute
@@ -48,7 +64,7 @@ min_message_interval = 60   # 1 minute
 # Create a dictionary to keep track of the last time a message was sent for each trading pair
 last_message_times = {}
 
-#Load exchanges
+# Load exchanges
 
 huobi = ccxt.huobi({
     'apiKey': huobi_api_key,
@@ -75,21 +91,18 @@ okx = ccxt.okx({
     'enableRateLimit': True
 })
 
-
 # Defining function for the telegram Bot, the first is sending message, the second is to stop the script with by sending a message to the bot
 async def send_message(bot_token, chat_id, text):
     bot = Bot(bot_token)
-    bot.send_message(chat_id=chat_id, text=text)
+    await bot.send_message(chat_id=chat_id, text=text)
 
 def stop_command(update: Update, context: CallbackContext):
     global running
     running = False
     update.message.reply_text('Stopping script')
 
-
 # Function for executing trades
 async def execute_trade(exchange, first_symbol, second_symbol, third_symbol, tickers, initial_amount, fee, first_tick_size, second_tick_size, third_tick_size):
-
     # Use adjusted trades (including fee)
     first_price = Decimal(tickers[first_symbol]['ask'])
     first_trade = (initial_amount / first_price) * (1 - Decimal(fee))
@@ -154,7 +167,6 @@ async def execute_trade(exchange, first_symbol, second_symbol, third_symbol, tic
     # return profit and final amount if needed for further calculations or logging
     return profit,  final_amount
 
-
 # Function for calculating the price impact of the order based on the orderbook asks, bids, and volumes
 async def calculate_price_impact(exchange, symbols, order_sizes, sides):
     logging.info(f'Calculating price impact ')
@@ -205,23 +217,25 @@ async def calculate_price_impact(exchange, symbols, order_sizes, sides):
     
     return price_impacts
 
-#Function for finding triangular arbitrage opportunities for each exchange
+# Function for finding triangular arbitrage opportunities for each exchange
 async def find_triangular_arbitrage_opportunities(exchange, markets, tickers, exchange_name, fee, initial_amount ):    
-    
     logging.info('Finding arbitrage opportunities.')
     # Read existing trades from CSV file
     csv_file = 'tri_arb_opportunities.csv'
     
     if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
-        df = pd.read_csv(csv_file)
-        tri_arb_opportunities = df.to_dict('records')
+        try:
+            df = pd.read_csv(csv_file)
+            tri_arb_opportunities = df.to_dict('records')
+        except pd.errors.EmptyDataError:
+            tri_arb_opportunities = []
     else:
         tri_arb_opportunities = []
     
     # Add a new variable to keep track of the last time a trade was added to the CSV file for each trading pair
     last_trade_time = {}
     
-    #load markets data
+    # Load markets data
     markets = await exchange.load_markets(True)
     symbols = list(markets.keys())
     tickers = await exchange.fetch_tickers()
@@ -293,7 +307,7 @@ async def find_triangular_arbitrage_opportunities(exchange, markets, tickers, ex
                 if first_price == 0 or second_price == 0 or third_price == 0:
                     continue
 
-                #Trades calculation
+                # Trades calculation
                 first_trade = initial_amount / first_price
                 first_trade = first_trade.quantize(Decimal(str(first_tick_size)), rounding=ROUND_DOWN)
                 
@@ -313,7 +327,6 @@ async def find_triangular_arbitrage_opportunities(exchange, markets, tickers, ex
                 
                 opportunities = []
 
-                
                 if profit_percentage > 0.3:
                     logging.info(f'Arbitrage opportunity found. Checking liquidity on {exchange_name}...')
                     print(f'\rArbitrage opportunities found, checking liquidity', end='\r')
@@ -432,10 +445,8 @@ async def find_triangular_arbitrage_opportunities(exchange, markets, tickers, ex
     # Write updated trades to CSV and Excell file
     df= pd.DataFrame(tri_arb_opportunities)
     df.to_csv(csv_file, index=False)
-    
 
 async def main():
-    
     # Get user input on USDT initial amount
     while True:
         initial_amount_input = input("How many USDT do you want to trade? | Only numbers are accepted (in the form 1, 10, 20.1) \nUSDT amount:  ")
@@ -445,25 +456,33 @@ async def main():
             break  # If the conversion succeeds, break out of the loop
         except InvalidOperation:
             print("Please enter a valid number.")
-    
-    # Set up the updater and dispatcher
-    updater = Updater(bot_token)
-    dispatcher = updater.dispatcher
-    
-    # Add a command handler for the /stop command
-    dispatcher.add_handler(MessageHandler(Filters.regex('^/stop$'), stop_command))
-    
-    # Start the updater
-    updater.start_polling()
+
+    # Создание объекта Application и передача ему токена
+    application = Application.builder().token(TOKEN).build()
+
+    # Регистрация обработчиков
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(Filters.TEXT & ~Filters.COMMAND, echo))
+
+    # Инициализация приложения
+    await application.initialize()
+
+    # Запуск бота
+    await application.start()
+    await application.updater.start_polling()
     
     # Message from the Telegram Bot
-    await send_message(bot_token, chat_id, "Finding arbitrage opportunities...")
+    await send_message(TOKEN, chat_id, "Finding arbitrage opportunities...")
+    
     global running
     running = True
     
     print('\nFinding arbitrage opportunities...')
     
     iteration_count = 1 # initialize iteration counter
+    start_time = time.time()  # Начало отсчета времени
+
     while running:
         try:
             # Load markets and tickers for all exchanges concurrently
@@ -488,8 +507,8 @@ async def main():
             await asyncio.gather(
                 find_triangular_arbitrage_opportunities(binance, binance_markets, binance_tickers, 'Binance', binance_fee, initial_amount),
                 find_triangular_arbitrage_opportunities(kucoin, kucoin_markets, kucoin_tickers, 'Kucoin', kucoin_fee, initial_amount),
-                find_triangular_arbitrage_opportunities(okx, okx_markets, okx_tickers, 'Okx', okx_fee, initial_amount ),
-                find_triangular_arbitrage_opportunities(huobi, huobi_markets, huobi_tickers, 'Huobi', huobi_fee, initial_amount )
+                find_triangular_arbitrage_opportunities(okx, okx_markets, okx_tickers, 'Okx', okx_fee, initial_amount),
+                find_triangular_arbitrage_opportunities(huobi, huobi_markets, huobi_tickers, 'Huobi', huobi_fee, initial_amount)
             )
             end_time = time.time()
             elapsed_time = end_time - start_time
@@ -503,9 +522,9 @@ async def main():
         except Exception as e:
             print(f'An error occurred: {e}')
             traceback.print_exc()
-    
-    # Stop the updater when the script is stopped
-    updater.stop()
+
+    # Stop the application when the script is stopped
+    await application.shutdown()
     
     # Release resources used by the exchange instances
     await binance.close()
@@ -513,5 +532,5 @@ async def main():
     await okx.close()
     await huobi.close()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
